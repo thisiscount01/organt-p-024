@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="description" content="Organt Chat — AI 기능이 탑재된 실시간 채팅" />
+  <title>Organt Chat</title>
+
+  <!-- Preconnect for CDN fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+
+  <!-- highlight.js dark theme (matches our code block CSS) -->
+  <link rel="stylesheet" href="/highlight-dark.min.css" />
+
+  <!-- App styles -->
+  <link rel="stylesheet" href="/style.css" />
+  <!-- Pointer-events fix: invisible scrims must not block clicks -->
+  <!-- Avatar color: driven by --avatar-color CSS var (set by JS as a token, not a direct color) -->
+  <style>
+    .sidebar-scrim { pointer-events: none; }
+    .sidebar-scrim--visible { pointer-events: auto; }
+    .summary-panel-scrim { pointer-events: none; }
+    .summary-panel-scrim--visible { pointer-events: auto; }
+    /* Avatar color via CSS custom property — JS sets token, CSS consumes */
+    .message__avatar,
+    .sidebar__user-avatar { background: var(--avatar-color, var(--clr-accent-muted)); }
+    .message--ai .message__avatar { background: var(--clr-accent-muted); }
+  </style>
+</head>
+<body>
+
+<!-- ── COLD-START OVERLAY — 서버 웜업 대기 UX ──────────────────────────── -->
+<div id="coldStartOverlay" style="position:fixed;inset:0;z-index:9999;background:oklch(12% 0.010 258);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1rem;color:oklch(93% 0.006 258);font-family:inherit;">
+  <div style="font-size:2.5rem;">💬</div>
+  <div id="coldStartMsg" style="font-size:1rem;opacity:0.8;">서버를 깨우는 중…</div>
+  <div style="font-size:0.75rem;opacity:0.5;">최초 접속 시 최대 30초 소요됩니다</div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     APP SHELL
+     ═══════════════════════════════════════════════════════════════ -->
+<div class="app" id="app">
+
+  <!-- ── SIDEBAR ──────────────────────────────────────────────── -->
+  <aside class="sidebar" id="sidebar" aria-label="채널 목록">
+
+    <!-- Workspace header -->
+    <div class="sidebar__header" role="banner">
+      <div class="sidebar__workspace-icon" aria-hidden="true">OC</div>
+      <span class="sidebar__workspace-name">Organt Chat</span>
+      <!-- Close button (mobile only) -->
+      <button class="sidebar__close-btn" id="sidebarCloseBtn" aria-label="사이드바 닫기">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+          <path d="M18 6L6 18M6 6l12 12"/>
+        </svg>
+      </button>
+    </div>
+
+    <!-- Channel section -->
+    <div class="sidebar__section-label">
+      <span>채널</span>
+      <button class="sidebar__add-btn" id="addChannelBtn" aria-label="채널 추가" title="채널 추가">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+          <path d="M12 5v14M5 12h14"/>
+        </svg>
+      </button>
+    </div>
+
+    <!-- Channel list -->
+    <ul class="sidebar__channels" id="channelList" role="listbox" aria-label="채널 목록"></ul>
+
+    <!-- User footer -->
+    <div class="sidebar__footer">
+      <div class="sidebar__user-avatar" id="userAvatar" aria-label="내 프로필" role="img">
+        <span id="userAvatarInitial"></span>
+        <span class="status-dot" aria-hidden="true"></span>
+      </div>
+      <span class="sidebar__user-name" id="userNameEl">연결 중…</span>
+      <button class="sidebar__footer-action" id="themeToggleBtn" title="라이트/다크 모드 전환" aria-label="테마 전환">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <circle cx="12" cy="12" r="5"/>
+          <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>
+        </svg>
+      </button>
+    </div>
+  </aside>
+
+  <!-- ── MAIN AREA ─────────────────────────────────────────────── -->
+  <div class="main" id="main">
+
+    <!-- Topbar -->
+    <header class="topbar" id="topbar" role="banner">
+      <!-- Hamburger (mobile) -->
+      <button class="topbar__hamburger" id="hamburgerBtn" aria-label="사이드바 열기">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+          <path d="M3 12h18M3 6h18M3 18h18"/>
+        </svg>
+      </button>
+
+      <!-- Channel name + description -->
+      <div class="topbar__channel" id="topbarChannel">
+        <span class="topbar__hash" aria-hidden="true">#</span>
+        <span class="topbar__channel-name" id="topbarChannelName">채널을 선택하세요</span>
+        <span class="topbar__divider" aria-hidden="true"></span>
+        <span class="topbar__channel-desc" id="topbarChannelDesc"></span>
+      </div>
+
+      <!-- Actions -->
+      <div class="topbar__actions">
+        <span class="topbar__members" id="memberCount" aria-live="polite"></span>
+        <button class="topbar__btn topbar__btn--primary" id="summaryBtn" aria-label="대화 요약 보기" title="대화 요약">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <path d="M9 11l3 3L22 4M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/>
+          </svg>
+          <span>요약</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- Message list -->
+    <div class="messages" id="messages" role="log" aria-live="polite" aria-label="메시지 목록">
+      <!-- Empty state -->
+      <div class="empty-state" id="emptyState" aria-label="채널 미선택 안내">
+        <div class="empty-state__icon" aria-hidden="true">💬</div>
+        <div class="empty-state__title">채널을 선택하세요</div>
+        <div class="empty-state__desc">왼쪽에서 채널을 선택하면 대화가 표시됩니다. <strong>@ai</strong>로 AI를 호출해 보세요.</div>
+      </div>
+      <div class="messages__end" id="messagesEnd" aria-hidden="true"></div>
+    </div>
+
+    <!-- Typing indicator -->
+    <div id="typingArea" aria-live="polite" aria-atomic="true"></div>
+
+    <!-- Composer -->
+    <div class="composer" id="composerEl">
+      <div class="composer__row">
+        <div
+          class="composer__input"
+          id="composerInput"
+          contenteditable="true"
+          role="textbox"
+          aria-multiline="true"
+          aria-label="메시지 입력"
+          data-placeholder="메시지를 입력하세요… (@ai로 AI 호출)"
+          spellcheck="true"
+        ></div>
+        <button class="composer__send" id="sendBtn" aria-label="전송" disabled>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M22 2L11 13M22 2L15 22l-4-9-9-4 20-7z"/>
+          </svg>
+        </button>
+      </div>
+      <div class="composer__footer">
+        <span class="composer__hint">Enter 전송 · Shift+Enter 줄바꿈</span>
+        <span class="composer__char-count" id="charCount" aria-live="polite"></span>
+      </div>
+    </div>
+  </div><!-- /.main -->
+
+</div><!-- /.app -->
+
+<!-- ── SIDEBAR SCRIM (mobile) ───────────────────────────────────────── -->
+<div class="sidebar-scrim" id="sidebarScrim" aria-hidden="true"></div>
+
+<!-- ── SUMMARY PANEL ─────────────────────────────────────────────────── -->
+<div class="summary-panel-scrim" id="summaryScrim" role="presentation"></div>
+<aside class="summary-panel" id="summaryPanel" aria-label="대화 요약" aria-hidden="true">
+  <div class="summary-panel__header">
+    <span class="summary-panel__title">대화 요약</span>
+    <button class="summary-panel__close" id="summaryCloseBtn" aria-label="패널 닫기">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+        <path d="M18 6L6 18M6 6l12 12"/>
+      </svg>
+    </button>
+  </div>
+  <div class="summary-panel__body" id="summaryBody">
+    <div class="empty-state" style="padding: var(--space-8)">
+      <div class="empty-state__icon" aria-hidden="true">📋</div>
+      <div class="empty-state__desc">상단의 <strong>요약</strong> 버튼을 눌러 채널 대화를 요약하세요.</div>
+    </div>
+  </div>
+  <div class="summary-panel__footer">
+    <button class="summary-panel__action" id="summaryRefreshBtn">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+        <path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
+      </svg>
+      다시 요약
+    </button>
+  </div>
+</aside>
+
+<!-- ── ADD CHANNEL MODAL ─────────────────────────────────────────────── -->
+<div class="summary-panel-scrim" id="modalScrim" style="z-index:400" aria-hidden="true"></div>
+<div id="addChannelModal" role="dialog" aria-modal="true" aria-labelledby="modalTitle" aria-hidden="true"
+  style="display:none; position:fixed; inset:0; z-index:500; display:flex; align-items:center; justify-content:center; display:none;">
+  <div style="
+    background: var(--clr-bg-overlay); border: 1px solid var(--clr-border-default);
+    border-radius: var(--radius-xl); padding: var(--space-6); width: min(400px, 90vw);
+    box-shadow: var(--shadow-xl); display:flex; flex-direction:column; gap: var(--space-4);
+  ">
+    <h2 id="modalTitle" style="font-size: var(--text-lg); font-weight: var(--weight-bold)">새 채널 만들기</h2>
+    <div style="display:flex; flex-direction:column; gap: var(--space-2)">
+      <label for="newChannelName" style="font-size: var(--text-sm); color: var(--clr-text-secondary); font-weight: var(--weight-medium)">채널 이름</label>
+      <input id="newChannelName" type="text" maxlength="50" placeholder="예: project-alpha"
+        style="background: var(--clr-bg-sunken); border: 1px solid var(--clr-border-default); border-radius: var(--radius-md);
+               padding: var(--space-2) var(--space-3); color: var(--clr-text-primary); font-size: var(--text-base); width: 100%;" />
+    </div>
+    <div style="display:flex; flex-direction:column; gap: var(--space-2)">
+      <label for="newChannelDesc" style="font-size: var(--text-sm); color: var(--clr-text-secondary); font-weight: var(--weight-medium)">설명 (선택)</label>
+      <input id="newChannelDesc" type="text" maxlength="200" placeholder="채널 설명을 입력하세요"
+        style="background: var(--clr-bg-sunken); border: 1px solid var(--clr-border-default); border-radius: var(--radius-md);
+               padding: var(--space-2) var(--space-3); color: var(--clr-text-primary); font-size: var(--text-base); width: 100%;" />
+    </div>
+    <div style="display:flex; gap: var(--space-2); justify-content:flex-end">
+      <button id="modalCancelBtn" style="height:36px; padding: 0 var(--space-4); border-radius: var(--radius-md);
+        background: var(--clr-bg-raised); color: var(--clr-text-secondary); font-size: var(--text-sm); font-weight: var(--weight-medium);
+        transition: background var(--dur-fast);">취소</button>
+      <button id="modalCreateBtn" style="height:36px; padding: 0 var(--space-4); border-radius: var(--radius-md);
+        background: var(--clr-accent); color: var(--clr-accent-fg); font-size: var(--text-sm); font-weight: var(--weight-semibold);
+        transition: background var(--dur-fast);">채널 만들기</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── TOAST CONTAINER ───────────────────────────────────────────────── -->
+<div class="toast-container" id="toastContainer" aria-live="polite" aria-atomic="true"></div>
+
+<!-- ══════════════════════════════════════════════════════════════════
+     SCRIPTS — CDN libs then app
+     ══════════════════════════════════════════════════════════════════ -->
+<!-- marked.js — Markdown parser (local bundle) -->
+<script src="/marked.min.js"></script>
+<!-- DOMPurify — XSS sanitizer (local bundle) -->
+<script src="/purify.min.js"></script>
+<!-- highlight.js — Code syntax highlighting (local bundle) -->
+<script src="/highlight.min.js"></script>
+
+<script src="/app.js"></script>
+</body>
+</html>
